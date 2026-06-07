@@ -11,10 +11,9 @@ import (
     "os/exec"
     "path/filepath"
     "strings"
-    //"path"
 )
 
-// ANSI цветовые коды
+// ANSI color codes
 const (
     colorReset  = "\033[0m"
     colorRed    = "\033[31m"
@@ -24,7 +23,7 @@ const (
     colorGray   = "\033[90m"
 )
 
-// --- Структуры данных OpenAI-совместимого API ---
+// --- OpenAI-compatible API Data Structures ---
 
 type ChatMessage struct {
     Role       string     `json:"role"`
@@ -106,14 +105,14 @@ type APIError struct {
     Type    string `json:"type"`
 }
 
-// --- Конфигурация ---
+// --- Configuration ---
 type Config struct {
     APIURL    string `json:"api_url"`
     ModelName string `json:"model_name"`
     APIKey    string `json:"api_key"`
 }
 
-// --- Оптимизированный аккумулятор для стриминга tool_calls ---
+// --- Optimized accumulator for streaming tool_calls ---
 type ToolCallAccum struct {
     ID       string
     Name     string
@@ -136,14 +135,12 @@ func loadConfig() Config {
 
     data, err := os.ReadFile(configPath)
     if err != nil {
-        // Файла нет или нет прав — спокойно используем дефолты
         return cfg
     }
 
-    // Парсим только то, что用户提供, остальное остается дефолтным
     var userCfg Config
     if err := json.Unmarshal(data, &userCfg); err != nil {
-        fmt.Fprintf(os.Stderr, "%s⚠ Предупреждение: ошибка парсинга config.json, используются дефолтные настройки.%s\n", colorYellow, colorReset)
+        fmt.Fprintf(os.Stderr, "%s⚠ Warning: config.json parse error, using defaults.%s\n", colorYellow, colorReset)
         return cfg
     }
 
@@ -153,7 +150,7 @@ func loadConfig() Config {
     if userCfg.ModelName != "" {
         cfg.ModelName = userCfg.ModelName
     }
-    cfg.APIKey = userCfg.APIKey // Пустая строка, если не задано
+    cfg.APIKey = userCfg.APIKey
 
     return cfg
 }
@@ -164,7 +161,8 @@ func main() {
     history := []ChatMessage{
         {
             Role:    "system",
-            Content: "Ты быстрый и точный терминальный ИИ-ассистент. Отвечай максимально кратко. Если нужно выполнить код или команду в терминале - используй tool_call. Не пиши пояснений до выполнения команды, просто вызови инструмент.",
+            // English prompts use fewer tokens, making the agent respond faster
+            Content: "You are a fast and precise terminal AI assistant. Reply as briefly as possible. If code or a command needs to be executed in the terminal, use a tool_call. Do not write explanations before executing the command, just call the tool.",
         },
     }
 
@@ -173,13 +171,13 @@ func main() {
             Type: "function",
             Function: FunctionDef{
                 Name:        "bash",
-                Description: "Выполняет команду в оболочке bash и возвращает вывод.",
+                Description: "Executes a command in the bash shell and returns the output.",
                 Parameters: ParamsSchema{
                     Type: "object",
                     Properties: map[string]Prop{
                         "command": {
                             Type:        "string",
-                            Description: "Команда для выполнения в bash",
+                            Description: "The command to execute in bash",
                         },
                     },
                     Required: []string{"command"},
@@ -188,9 +186,9 @@ func main() {
         },
     }
 
-    fmt.Printf("%s► Инициализация агента%s\n", colorCyan, colorReset)
-    fmt.Printf("%s● Модель: %s | Endpoint: %s%s\n", colorGray, cfg.ModelName, cfg.APIURL, colorReset)
-    fmt.Printf("%s● Конфиг: ~/.config/termagent/config.json%s\n\n", colorGray, colorReset)
+    fmt.Printf("%s► Initializing Agent%s\n", colorCyan, colorReset)
+    fmt.Printf("%s● Model: %s | Endpoint: %s%s\n", colorGray, cfg.ModelName, cfg.APIURL, colorReset)
+    fmt.Printf("%s● Config: ~/.config/agent/config.json%s\n\n", colorGray, colorReset)
 
     scanner := bufio.NewScanner(os.Stdin)
     for {
@@ -211,7 +209,7 @@ func main() {
         for {
             resp, toolCalls, err := streamChat(history, tools, cfg)
             if err != nil {
-                fmt.Fprintf(os.Stderr, "\n%s✖ Ошибка API: %v%s\n", colorRed, err, colorReset)
+                fmt.Fprintf(os.Stderr, "\n%s✖ API Error: %v%s\n", colorRed, err, colorReset)
                 history = history[:len(history)-1]
                 break
             }
@@ -238,7 +236,7 @@ func main() {
             history = append(history, ChatMessage{Role: "assistant", ToolCalls: apiToolCalls})
 
             for _, tc := range accumCalls {
-                fmt.Printf("\n%s⚙ Вызов инструмента [%s]%s\n", colorYellow, tc.Name, colorReset)
+                fmt.Printf("\n%s⚙ Tool Call [%s]%s\n", colorYellow, tc.Name, colorReset)
                 cmdStr := extractJSONField(tc.ArgsJson.String(), "command")
                 if cmdStr == "" {
                     cmdStr = tc.ArgsJson.String()
@@ -253,7 +251,7 @@ func main() {
                 }
 
                 if len(result) > 2000 {
-                    result = result[:2000] + "\n...[вывод обрезан агентом]"
+                    result = result[:2000] + "\n...[output truncated by agent]"
                 }
 
                 fmt.Printf("%s%s%s\n", colorGray, result, colorReset)
@@ -278,7 +276,7 @@ func streamChat(history []ChatMessage, tools []ToolDefinition, cfg Config) (stri
 
     jsonData, err := json.Marshal(reqBody)
     if err != nil {
-        return "", nil, fmt.Errorf("ошибка маршалинга: %w", err)
+        return "", nil, fmt.Errorf("marshaling error: %w", err)
     }
 
     ctx, cancel := context.WithCancel(context.Background())
@@ -289,7 +287,7 @@ func streamChat(history []ChatMessage, tools []ToolDefinition, cfg Config) (stri
         return "", nil, err
     }
     req.Header.Set("Content-Type", "application/json")
-    
+
     if cfg.APIKey != "" {
         req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
     }
